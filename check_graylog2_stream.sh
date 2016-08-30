@@ -8,17 +8,18 @@
 # You should have received a copy of the GNU General Public License along with Emind Systems DevOps Toolset. If not, see http://www.gnu.org/licenses.
 
 SERVER_URL=""
-API_KEY=""
+GRAYLOG_USER=""
+GRAYLOG_PWD=""
 TIME_DIFF=""
-STREAM_NAME=""
+STREAM_ID=""
 INVERT="OFF"
 ALARM_STATE="UNKNOWN"
 SSL="OFF"
 
-function check_jshon {
-    jshon_cmd=`which jshon`
-    if [ ! -e ${jshon_cmd} ]; then
-        echo "jshon not installed"
+function check_jq {
+    jshon_cmd=`which jq`
+    if [ ! -e ${jq_cmd} ]; then
+        echo "jq not installed"
         exit 95
     fi
 }
@@ -45,23 +46,24 @@ function get_streams_json()
 
 function get_stream_index
 {
-    TARGET_STREAM_TITLE=$1
+    TARGET_STREAM_ID=$1
     STREAM_INDEX=0
-    CURRENT_STREAM_TITLE=""
+    CURRENT_STREAM_ID=""
     SEARCH_STATUS=false
-	FIRST_STREAM_TITLE=$(jshon -e ${STREAM_INDEX} -e "title" -u < ${GRAYLOG2_STREAMS_FILE})
-    write_log "FIRST_STREAM_TITLE=${FIRST_STREAM_TITLE}"
+	FIRST_STREAM_ID=$(echo ${GRAYLOG2_STREAMS_FILE} | jq ".streams[${TARGET_STREAM_ID}].id")
+    write_log "FIRST_STREAM_ID=${FIRST_STREAM_ID}"
     while true; do
-		CURRENT_STREAM_TITLE=$(jshon -e ${STREAM_INDEX} -e "title" -u < ${GRAYLOG2_STREAMS_FILE})
-        if [ "${TARGET_STREAM_TITLE}" == "${CURRENT_STREAM_TITLE}" ]; then
+		CURRENT_STREAM_ID=$(jshon -e ${STREAM_INDEX} -e "title" -u < ${GRAYLOG2_STREAMS_FILE})
+    CURRENT_STREAM_ID=$(echo ${GRAYLOG2_STREAMS_FILE} | jq ".streams[${TARGET_STREAM_ID}].id")
+        if [ "${TARGET_STREAM_ID}" == "${CURRENT_STREAM_ID}" ]; then
 			SEARCH_STATUS=true
 			break
-		elif [ ${STREAM_INDEX} -gt 0 ] && [ "${CURRENT_STREAM_TITLE}" == "${FIRST_STREAM_TITLE}" ]; then
+		elif [ ${STREAM_INDEX} -gt 0 ] && [ "${CURRENT_STREAM_ID}" == "${FIRST_STREAM_ID}" ]; then
 			break
 		fi
 		STREAM_INDEX=$(( ${STREAM_INDEX} + 1 ))
     done
-	write_log "TARGET_STREAM_TITLE=${TARGET_STREAM_TITLE} STREAM_INDEX=${STREAM_INDEX}"
+	write_log "TARGET_STREAM_ID=${TARGET_STREAM_ID} STREAM_INDEX=${STREAM_INDEX}"
 }
 
 function get_perf_count()
@@ -88,19 +90,22 @@ function get_perf_count()
 	echo $VALUE
 }
 
-while getopts ig:k:t:s:c flag; do
+while getopts ig:u:p:t:s:c flag; do
 case $flag in
     g)
         SERVER_URL=$OPTARG
         ;;
-    k)
-        API_KEY=$OPTARG
+    u)
+        GRAYLOG_USER=$OPTARG
+        ;;
+    p)
+        GRAYLOG_PWD=$OPTARG
         ;;
     t)
         TIME_DIFF=$OPTARG
         ;;
     s)
-        STREAM_NAME=$OPTARG
+        STREAM_ID=$OPTARG
         ;;
     i)
         INVERT="ON"
@@ -111,29 +116,29 @@ case $flag in
   esac
 done
 
-if [ "x${SERVER_URL}" == "x" ] || [ "x${API_KEY}" == "x" ] || [ "x${TIME_DIFF}" == "x" ] || [ "x${STREAM_NAME}" == "x" ]; then
+if [ "x${SERVER_URL}" == "x" ] || [ "x${GRAYLOG_USER}" == "x" ] || [ "x${GRAYLOG_PWD}" == "x" ] || [ "x${TIME_DIFF}" == "x" ] || [ "x${STREAM_ID}" == "x" ]; then
 echo "Missing input parameter"
-        echo "Usage: $0 -g <graylog server url> -k <graylog api_key> -t <alarm age> -s <stream name>"
+        echo "Usage: $0 -g <graylog server url> -u <graylog username> -p <graylog password> -t <alarm age> -s <stream id>"
         exit 96
 fi
 
-check_jshon
+check_jq
 
-write_log "CMD Params: -g ${SERVER_URL} -k ${API_KEY} -t ${TIME_DIFF} -s ${STREAM_NAME}"
+write_log "CMD Params: -g ${SERVER_URL} -t ${TIME_DIFF} -s ${STREAM_ID}"
 
-STREAM_URL="${SERVER_URL}/streams.json?api_key=${API_KEY}"
+STREAM_URL="http://${GRAYLOG_USER}:${GRAYLOG_PWD}@${SERVER_URL}/streams}"
 GRAYLOG2_STREAMS_FILE="/tmp/$$.json"
 
 get_streams_json "${STREAM_URL}" "${GRAYLOG2_STREAMS_FILE}"
-get_stream_index "${STREAM_NAME}"
+get_stream_index "${STREAM_ID}"
 
 LAST_ALARM=$(jshon -e ${STREAM_INDEX} -e "last_alarm" -u < ${GRAYLOG2_STREAMS_FILE} 2> /dev/null)
 STREAM_ID=$(jshon -e ${STREAM_INDEX} -e "_id" -u < ${GRAYLOG2_STREAMS_FILE} 2> /dev/null)
 rm -rf ${GRAYLOG2_STREAMS_FILE}
 
 if [ ${SEARCH_STATUS} == false ]; then
-echo "Unknown Stream:${STREAM_NAME}"
-        write_log "Unknown Stream:${STREAM_NAME}"
+echo "Unknown Stream:${STREAM_ID}"
+        write_log "Unknown Stream:${STREAM_ID}"
         exit 98
 fi
 
@@ -168,8 +173,8 @@ get_streams_json "${PERF_STREAM_URL}" "${GRAYLOG2_STREAMS_FILE}"
 PERF_VALUE=$(get_perf_count "${GRAYLOG2_STREAMS_FILE}")
 rm -rf ${GRAYLOG2_STREAMS_FILE}
 
-write_log "Alarm:${ALARM_STATE} - Stream:${STREAM_NAME} Last-alarm:${ALARM_TIME} Invert:$INVERT | avg-msg-min=${PERF_VALUE}"
+write_log "Alarm:${ALARM_STATE} - Stream:${STREAM_ID} Last-alarm:${ALARM_TIME} Invert:$INVERT | avg-msg-min=${PERF_VALUE}"
 write_log "EXIT_CODE=${EXIT_CODE}"
 
-echo "Alarm:${ALARM_STATE} - Stream:${STREAM_NAME} Last-alarm:${ALARM_TIME} | avg-msg-min=${PERF_VALUE};"
+echo "Alarm:${ALARM_STATE} - Stream:${STREAM_ID} Last-alarm:${ALARM_TIME} | avg-msg-min=${PERF_VALUE};"
 exit ${EXIT_CODE}
